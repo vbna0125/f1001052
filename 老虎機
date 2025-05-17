@@ -1,0 +1,226 @@
+import tkinter as tk
+import random
+from tkinter import messagebox
+
+# 定義符號與賠率（A 機率最小，I 機率最高）
+symbols = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', '&']
+symbol_weights = {
+    'A': 0.3, 'B': 0.6, 'C': 0.6, 'D': 0.9,
+    'E': 0.9, 'F': 1.1, 'G': 1.1, 'H': 1.3, 'I': 1.4, '&': 0.15
+}
+
+base_payouts = {
+    'A': {'8-9': 300, '10-11': 700, '12+': 1500},
+    'B': {'8-9': 80, '10-11': 250, '12+': 600},
+    'C': {'8-9': 60, '10-11': 150, '12+': 400},
+    'D': {'8-9': 40, '10-11': 80, '12+': 300},
+    'E': {'8-9': 30, '10-11': 60, '12+': 250},
+    'F': {'8-9': 24, '10-11': 36, '12+': 200},
+    'G': {'8-9': 18, '10-11': 28, '12+': 150},
+    'H': {'8-9': 12, '10-11': 24, '12+': 100},
+    'I': {'8-9': 2, '10-11': 5, '12+': 10},
+}
+
+# 建立滾輪，取消每排最多 1 個 '&' 的限制
+def create_reels():
+    result = []
+    for _ in range(5):
+        row = []
+        for _ in range(6):
+            available = list(symbol_weights.keys())
+            weights = [symbol_weights[s] for s in available]
+            chosen = random.choices(available, weights=weights)[0]
+            row.append(chosen)
+        result.append(row)
+    return result
+
+# 掃描中獎符號位置
+def find_matches(matrix):
+    counts = {}
+    positions = {}
+    for i in range(5):
+        for j in range(6):
+            symbol = matrix[i][j]
+            if symbol != '&':
+                counts[symbol] = counts.get(symbol, 0) + 1
+                positions.setdefault(symbol, []).append((i, j))
+
+    matches = {}
+    for symbol, count in counts.items():
+        if count >= 8:
+            matches[symbol] = positions[symbol]
+    return matches
+
+# 檢查是否觸發免費旋轉（不加倍獎金）
+def check_free_spin_trigger(matrix):
+    and_count = sum(row.count('&') for row in matrix)
+    if and_count >= 4:
+        root.after(0, lambda: messagebox.showinfo("免費旋轉", f"出現 {and_count} 個 '&'，獲得 10 次免費旋轉！"))
+        return 0, 10
+    return 0, 0
+
+# 更新畫面上的圖示
+def update_display():
+    for i in range(5):
+        for j in range(6):
+            label_matrix[i][j].config(text=reel_matrix[i][j] if reel_matrix[i][j] else '', bg='white')
+
+# 動畫消除並掉落
+def animate_and_drop(matches, bet_amount):
+    global reel_matrix, total_eliminated
+    payout = 0
+    elimination_details = []
+    for symbol, pos_list in matches.items():
+        for (i, j) in pos_list:
+            label_matrix[i][j].config(bg='yellow')
+        root.update()
+        root.after(300)
+        for (i, j) in pos_list:
+            reel_matrix[i][j] = None
+        count = len(pos_list)
+        total_eliminated += count
+        elimination_details.append(f"{symbol} x{count}")
+        if count >= 12:
+            payout += base_payouts[symbol]['12+'] * bet_amount
+        elif count >= 10:
+            payout += base_payouts[symbol]['10-11'] * bet_amount
+        elif count >= 8:
+            payout += base_payouts[symbol]['8-9'] * bet_amount
+
+    drop_symbols()
+    update_display()
+    eliminated_label.config(text=f"本次消除數量: {total_eliminated}（" + "，".join(elimination_details) + ")")
+    return payout
+
+# 掉落與補新符號（保留未被消除的並補新）
+def drop_symbols():
+    global reel_matrix
+    for col in range(6):
+        stack = [reel_matrix[row][col] for row in range(5) if reel_matrix[row][col] is not None]
+        to_add = 5 - len(stack)
+        for _ in range(to_add):
+            available = list(symbol_weights.keys())
+            weights = [symbol_weights[s] for s in available]
+            new_symbol = random.choices(available, weights=weights)[0]
+            stack.insert(0, new_symbol)
+        for row in range(5):
+            reel_matrix[row][col] = stack[row]
+
+# 主旋轉邏輯
+def spin(is_free=False):
+    global points, reel_matrix, free_spins, total_eliminated
+
+    if not is_free:
+        try:
+            bet = int(bet_entry.get())
+        except ValueError:
+            messagebox.showwarning("警告", "請輸入有效的下注金額！")
+            return
+
+        if bet > points:
+            messagebox.showwarning("警告", "點數不足以下注！")
+            return
+
+        points -= bet
+    else:
+        bet = 1
+
+    total_eliminated = 0
+    update_points(0)
+    reel_matrix = create_reels()
+    update_display()
+    total_payout = 0
+    winning_symbols = []
+
+    # 特殊符號 '&' 的中獎邏輯
+    and_count = sum(row.count('&') for row in reel_matrix)
+    if and_count == 4:
+        total_payout += bet * 3
+    elif and_count == 5:
+        total_payout += bet * 5
+    elif and_count >= 6:
+        total_payout += bet * 1000
+
+    if not is_free:
+        _, spins = check_free_spin_trigger(reel_matrix)
+        if spins > 0:
+            free_spins += spins
+            free_spin_label.config(text=f"免費旋轉次數: {free_spins}")
+
+    while True:
+        matches = find_matches(reel_matrix)
+        if not matches:
+            break
+        winning_symbols.extend(matches.keys())
+        total_payout += animate_and_drop(matches, bet)
+        root.after(300)
+
+    update_points(total_payout)
+    payout_label.config(text=f"獲得獎金: {total_payout} 金幣")
+    if winning_symbols:
+        winning_line_label.config(text=f"中獎連線: {'、'.join(sorted(set(winning_symbols)))}")
+    else:
+        winning_line_label.config(text="中獎連線: 無")
+
+    if points <= 0:
+        messagebox.showinfo("遊戲結束", "您的點數已經用完！")
+        root.quit()
+
+    if not is_free and free_spins > 0:
+        root.after(500, start_free_spins)
+
+# 自動執行免費旋轉
+def start_free_spins():
+    global free_spins
+    if free_spins > 0:
+        free_spins -= 1
+        free_spin_label.config(text=f"免費旋轉次數: {free_spins}")
+        spin(is_free=True)
+
+# 點數更新
+def update_points(earned_points):
+    global points
+    points += earned_points
+    points_label.config(text=f"剩餘點數: {points} 點")
+
+# GUI 初始化
+root = tk.Tk()
+root.title("雷神之槌 老虎機遊戲")
+
+points = 10000
+free_spins = 0
+total_eliminated = 0
+reel_matrix = create_reels()
+
+points_label = tk.Label(root, text=f"剩餘點數: {points} 點", font=("Arial", 16))
+points_label.pack(pady=10)
+
+free_spin_label = tk.Label(root, text=f"免費旋轉次數: {free_spins}", font=("Arial", 14))
+free_spin_label.pack(pady=5)
+
+eliminated_label = tk.Label(root, text=f"本次消除數量: {total_eliminated}", font=("Arial", 14))
+eliminated_label.pack(pady=5)
+
+frame = tk.Frame(root)
+frame.pack()
+label_matrix = [[tk.Label(frame, text='', font=("Arial", 18), width=4, height=2, relief="ridge", borderwidth=2) for _ in range(6)] for _ in range(5)]
+for i in range(5):
+    for j in range(6):
+        label_matrix[i][j].grid(row=i, column=j)
+
+payout_label = tk.Label(root, text="獲得獎金: 0 金幣", font=("Arial", 16))
+payout_label.pack(pady=10)
+
+winning_line_label = tk.Label(root, text="中獎連線: 無", font=("Arial", 14))
+winning_line_label.pack(pady=10)
+
+bet_label = tk.Label(root, text="請選擇下注點數", font=("Arial", 14))
+bet_label.pack(pady=10)
+bet_entry = tk.Entry(root, font=("Arial", 14))
+bet_entry.pack(pady=10)
+
+spin_button = tk.Button(root, text="旋轉", font=("Arial", 16), command=spin)
+spin_button.pack(pady=20)
+
+update_display()
+root.mainloop()
